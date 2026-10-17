@@ -1,0 +1,9 @@
+{
+  "review_status": "unreviewed",
+  "purpose": "Organ identity only; do not supply the target disease diagnosis",
+  "prompts": {
+    "prostate": ["An H&E histology image of prostate tissue.", "A microscopic tissue section from the prostate.", "Prostatic tissue in a histopathology image."],
+    "colon": ["An H&E histology image of colon tissue.", "A microscopic tissue section from the colon.", "Colonic tissue in a histopathology image."],
+    "lung": ["An H&E histology image of lung tissue.", "A microscopic tissue section from the lung.", "Pulmonary tissue in a histopathology image."]
+  }
+}

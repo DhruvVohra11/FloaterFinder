@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "model_id": "conch",
+      "text_bank": "../data/conch/text.npz",
+      "slides": ["../data/conch/slide-0000.npz", "../data/conch/slide-0001.npz"]
+    }
+  ]
+}

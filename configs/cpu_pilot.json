@@ -1,0 +1,11 @@
+{
+  "neighbors": 10,
+  "exclusion_radius_um": 1000.0,
+  "smoothing_radius_um": 160.0,
+  "visual_weight": 1.0,
+  "chunk_size": 128,
+  "top_k": 10,
+  "calibration_quantile": 0.99,
+  "doses": [0.0, 0.005, 0.01, 0.025, 0.05, 0.1],
+  "seed": 7
+}

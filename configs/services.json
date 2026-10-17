@@ -1,0 +1,6 @@
+{
+  "conch": {"endpoint": "http://gpub055.delta.ncsa.illinois.edu:8000", "key_env": "FF_CONCH_API_KEY"},
+  "musk": {"endpoint": "http://gpub055.delta.ncsa.illinois.edu:8001", "key_env": "FF_MUSK_API_KEY"},
+  "quiltnet": {"endpoint": "http://gpub055.delta.ncsa.illinois.edu:8002", "key_env": "FF_QUILTNET_API_KEY"},
+  "plip": {"endpoint": "http://gpub055.delta.ncsa.illinois.edu:8003", "key_env": "FF_PLIP_API_KEY"}
+}

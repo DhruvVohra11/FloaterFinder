@@ -1,0 +1,16 @@
+{
+  "slides": [
+    {
+      "slide_id": "replace-with-source-slide-id",
+      "patient_id": "replace-with-real-deidentified-case-id",
+      "organ": "prostate",
+      "split": "development",
+      "tile_size_um": 112.0,
+      "stride_um": 112.0,
+      "tiles": [
+        {"tile_id": "globally-unique-tile-1", "path": "../data/tile1.png", "x_um": 0.0, "y_um": 0.0},
+        {"tile_id": "globally-unique-tile-2", "path": "../data/tile2.png", "x_um": 112.0, "y_um": 0.0}
+      ]
+    }
+  ]
+}
