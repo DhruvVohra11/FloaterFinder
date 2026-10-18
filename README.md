@@ -17,6 +17,8 @@ This validates the cache, records coverage, calibrates on separate slides, bench
 
 For the first real embedding drop, use `CacheWriter` in the encoder job or `assemble` on a folder of existing slide/text NPZ exports. `preflight` checks reciprocal fragment feasibility before kNN; new development runs perform it automatically. The [handoff guide](docs/TEAM_HANDOFF.md#automatic-export-and-intake) has copyable commands and an exporter example. Create a source-only handoff archive with `python scripts/build_handoff.py --output outputs/teammate-handoff.zip`.
 
+The [readiness audit](docs/READINESS.md) records numerical verification, report interaction checks, performance measurements and remaining limits. Detection supports explicit `--new-cohort` scoring with frozen compatibility checks. Exact kNN now bounds pairwise working memory along both axes; large report maps are labeled sampled overviews, with complete tile exports retained.
+
 | Component | Status |
 |---|---|
 | Patient-separated cache validation and image/text space checks | Implemented and tested |

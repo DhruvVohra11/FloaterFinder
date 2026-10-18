@@ -9,3 +9,6 @@ data/
 !.env.example
 *credentials*.json
 .DS_Store
+node_modules/
+build/
+dist/

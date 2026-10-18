@@ -1,0 +1,6 @@
+{
+  "name": "floaterfinder-report-tests",
+  "private": true,
+  "scripts": {"test:report": "node scripts/test_report.mjs"},
+  "devDependencies": {"jsdom": "26.1.0"}
+}

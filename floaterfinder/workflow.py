@@ -98,7 +98,6 @@ def run(dataset_path, output, config_path=None, calibration_path=None, split='de
     data.write_json(out / 'intake.json', audit)
     try:
         if calibration_path is None:
-            config_path = config_path or Path(__file__).resolve().parents[1] / 'configs/cpu_pilot.json'
             print('Checking reciprocal fragment feasibility…', flush=True)
             plan = preflight(dataset_path, config_path, split)
             data.write_json(out / 'preflight.json', plan)

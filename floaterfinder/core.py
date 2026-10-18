@@ -6,11 +6,16 @@ import numpy as np
 
 
 def unit(x):
-    x = np.asarray(x, dtype=np.float32)
-    norms = np.linalg.norm(x.astype(np.float64), axis=-1, keepdims=True)
-    if not np.isfinite(x).all() or (norms < 1e-8).any():
+    x = np.asarray(x)
+    if x.dtype.kind not in 'fiu' or x.ndim < 1 or x.shape[-1] == 0:
+        raise ValueError('Embeddings must be real vectors with a nonempty feature dimension')
+    x = x.astype(np.float64)
+    scale = np.max(np.abs(x), axis=-1, keepdims=True)
+    if not np.isfinite(x).all() or (scale == 0).any():
         raise ValueError('Embeddings must be finite and nonzero')
-    return (x / norms).astype(np.float32)
+    # Scaling first avoids overflow/underflow for finite future encoder outputs.
+    x = x / scale
+    return (x / np.linalg.norm(x, axis=-1, keepdims=True)).astype(np.float32)
 
 
 def cosine_scores(features, prototypes):
@@ -75,43 +80,74 @@ def zscore(values, valid=None):
     return out
 
 
+def _geometry(xy_um, n, radius_um, chunk_size):
+    xy = np.asarray(xy_um, dtype=float)
+    if xy.shape != (n, 2) or not np.isfinite(xy).all():
+        raise ValueError('Coordinates must be finite [N,2]')
+    if type(chunk_size) is not int or chunk_size < 1 or not np.isfinite(radius_um) or radius_um < 0:
+        raise ValueError('Invalid spatial parameters')
+    return xy
+
+
+def _distance_squared(a, b):
+    dx = a[:, None, 0] - b[None, :, 0]
+    dy = a[:, None, 1] - b[None, :, 1]
+    return dx*dx + dy*dy
+
+
 def far_knn(features, xy_um, radius_um, k, chunk_size):
-    """Exact blocked cosine kNN. O(N^2 D) time; O(chunk_size*N) pair memory.
+    """Exact two-axis blocked cosine kNN. O(N^2 D) time.
+
+    Pairwise blocks use at most B*max(B,1024) entries, plus B*K candidates.
 
     A tile with fewer than k eligible distant neighbors has unavailable Q2.
     This is reported explicitly; missing Q2 contributes zero after z-scoring.
     """
     x = unit(features)
-    xy = np.asarray(xy_um, dtype=float)
-    if k < 1 or chunk_size < 1 or radius_um < 0:
+    xy = _geometry(xy_um, len(x), radius_um, chunk_size)
+    if type(k) is not int or k < 1:
         raise ValueError('Invalid kNN parameters')
     n = len(x)
     values, valid = np.zeros(n), np.zeros(n, dtype=bool)
+    if k >= n:
+        return values, valid
+    reference_size = max(chunk_size, 1024)
     for start in range(0, n, chunk_size):
         stop = min(n, start + chunk_size)
-        dx = xy[start:stop, None, 0] - xy[None, :, 0]
-        dy = xy[start:stop, None, 1] - xy[None, :, 1]
-        eligible = dx * dx + dy * dy > radius_um * radius_um
-        eligible[np.arange(stop - start), np.arange(start, stop)] = False
-        ok = eligible.sum(axis=1) >= k
-        if ok.any():
-            similarity = x[start:stop] @ x.T
+        best = np.full((stop-start, k), -np.inf, dtype=np.float32)
+        counts = np.zeros(stop-start, dtype=np.int64)
+        for ref in range(0, n, reference_size):
+            end = min(n, ref + reference_size)
+            eligible = _distance_squared(xy[start:stop], xy[ref:end]) > radius_um**2
+            counts += eligible.sum(axis=1)
+            similarity = x[start:stop] @ x[ref:end].T
             similarity[~eligible] = -np.inf
-            chosen = np.partition(similarity[ok], n-k, axis=1)[:, -k:]
-            values[start:stop][ok] = (1 - np.clip(chosen, -1, 1)).mean(axis=1)
+            candidates = np.concatenate([best, similarity], axis=1)
+            candidates.partition(candidates.shape[1]-k, axis=1)
+            best = candidates[:, -k:].copy()
+        ok = counts >= k
+        if ok.any():
+            values[start:stop][ok] = (1 - np.clip(best[ok], -1, 1)).mean(axis=1)
             valid[start:stop] = ok
     return values, valid
 
 
 def smooth(values, xy_um, radius_um, chunk_size):
+    values = np.asarray(values, dtype=float)
+    xy_um = _geometry(xy_um, len(values), radius_um, chunk_size)
     if radius_um <= 0:
         return values.copy()
     out = np.empty_like(values)
     for start in range(0, len(values), chunk_size):
         xy = xy_um[start:start+chunk_size]
-        d2 = ((xy[:, None, :] - xy_um[None, :, :]) ** 2).sum(axis=2)
-        neighbors = d2 <= radius_um ** 2
-        out[start:start+len(xy)] = (neighbors @ values) / neighbors.sum(axis=1)
+        total = np.zeros_like(values[start:start+len(xy)])
+        count = np.zeros(len(xy))
+        for ref in range(0, len(values), max(chunk_size, 1024)):
+            end = min(len(values), ref+max(chunk_size, 1024))
+            neighbors = _distance_squared(xy, xy_um[ref:end]) <= radius_um**2
+            total += neighbors @ values[ref:end]
+            count += neighbors.sum(axis=1)
+        out[start:start+len(xy)] = total / (count if values.ndim == 1 else count[:, None])
     return out
 
 
@@ -122,10 +158,11 @@ def foreignness(features, xy_um, prototypes, stated_organ_index, cfg):
     visual, valid = far_knn(features, xy_um, cfg['exclusion_radius_um'],
                              cfg['neighbors'], cfg['chunk_size'])
     q1, q2 = zscore(others - own), zscore(visual, valid)
-    signals = {'organ_only': q1, 'visual_only': q2,
-               'combined': q1 + cfg['visual_weight'] * q2}
-    signals = {name: smooth(v, xy_um, cfg['smoothing_radius_um'], cfg['chunk_size'])
-               for name, v in signals.items()}
+    # One geometry pass for both signals. Averaging is linear, so combining
+    # their smoothed values is the same detector, without three distance scans.
+    smoothed = smooth(np.column_stack([q1, q2]), xy_um, cfg['smoothing_radius_um'], cfg['chunk_size'])
+    signals = {'organ_only': smoothed[:, 0], 'visual_only': smoothed[:, 1],
+               'combined': smoothed[:, 0] + cfg['visual_weight'] * smoothed[:, 1]}
     return scores, signals, valid
 
 
@@ -138,9 +175,11 @@ def connected_fragment(xy_um, stride_um, count, seed):
     origin = xy_um.min(axis=0)
     grid_float = (xy_um - origin) / stride_um
     grid = np.rint(grid_float).astype(int)
-    if not np.allclose(grid_float, grid, atol=1e-3):
+    if not np.allclose(grid_float, grid, atol=1e-3, rtol=0):
         raise ValueError('Donor coordinates must lie on the stated regular grid')
     lookup = {tuple(p): i for i, p in enumerate(grid)}
+    if len(lookup) != len(grid):
+        raise ValueError('Multiple donor coordinates map to the same grid location')
     rng = np.random.default_rng(seed)
     visited = set()
     for anchor in rng.permutation(len(grid)):

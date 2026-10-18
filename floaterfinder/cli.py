@@ -15,7 +15,7 @@ def main():
     q.set_defaults(fn=assembly)
     q = sub.add_parser('preflight', help='Check reciprocal mixture feasibility without running kNN')
     q.add_argument('--dataset', required=True)
-    q.add_argument('--config', default='configs/cpu_pilot.json')
+    q.add_argument('--config', help='Defaults to the installed CPU pilot configuration')
     q.add_argument('--split', choices=['development', 'test'], default='development')
     q.add_argument('--output', required=True)
     def feasibility(a):
@@ -60,9 +60,10 @@ def main():
     q.add_argument('--calibration', required=True)
     q.add_argument('--output', required=True)
     q.add_argument('--split', choices=['development', 'test'], default='development')
+    q.add_argument('--new-cohort', action='store_true', help='Apply frozen thresholds to a disjoint compatible cohort')
     def detection(a):
         from .detection import detect
-        return detect(a.dataset, a.calibration, a.output, a.split)
+        return detect(a.dataset, a.calibration, a.output, a.split, a.new_cohort)
     q.set_defaults(fn=detection)
     q = sub.add_parser('demo-data')
     q.add_argument('--output', required=True)
@@ -72,7 +73,7 @@ def main():
     q.set_defaults(fn=lambda a: f"Validated {len(data.load_dataset(a.dataset)['models'])} model caches")
     q = sub.add_parser('calibrate')
     q.add_argument('--dataset', required=True)
-    q.add_argument('--config', default='configs/cpu_pilot.json')
+    q.add_argument('--config', help='Defaults to the installed CPU pilot configuration')
     q.add_argument('--output', required=True)
     def calibration(a):
         benchmark.calibrate(a.dataset, a.config, a.output)

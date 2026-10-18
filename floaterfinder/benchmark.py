@@ -14,6 +14,28 @@ from .data import load_dataset, load_config, sha256, write_json
 from .detection import CONVENTIONS, checked_calibration, save_tiles
 
 DETECTORS = ('organ_only', 'visual_only', 'combined')
+MAX_MAP_TILES = 2000
+
+
+def report_diagnostics(curves, controls):
+    """Describe measurement support; these are not clinical acceptance gates."""
+    notes = []
+    groups = sorted({(r['model'], r['pooling'], r['regime']) for r in curves})
+    for name, pooling, regime in groups:
+        baseline = [r for r in curves if (r['model'], r['pooling'], r['regime'], r['method']) ==
+                    (name, pooling, regime, 'no_filter') and r['dose'] > 0]
+        context = f'{name} / {pooling} / {regime}'
+        if not baseline:
+            notes.append(f'{context}: no successful positive-dose mixtures.')
+        elif not any(r['corrupted_correct_cases'] for r in baseline):
+            notes.append(f'{context}: recovery is unmeasured; no originally correct cases became incorrect.')
+        if baseline and any(r['initially_correct_cases'] == 0 for r in baseline):
+            notes.append(f'{context}: at least one dose has no initially correct cases for the error endpoint.')
+    for name in sorted({r['model'] for r in controls}):
+        unique = [r for r in controls if r['model'] == name and r['pooling'] == 'mean' and r['method'] == 'combined']
+        if unique and any(r['q2_unavailable_fraction'] > 0 for r in unique):
+            notes.append(f'{name}: some original tiles lack enough distant neighbors; inspect kNN availability.')
+    return notes
 
 
 def source_hash():
@@ -29,6 +51,13 @@ def calibrate(dataset_path, config_path, output):
               'source_hashes': source_hash(), 'models': {},
               'rule': 'Strictly greater than pooled tile-score quantile AFTER smoothing; no guarantee on new slides',
               'created_at': datetime.now(timezone.utc).isoformat()}
+    reference_slides = next(iter(data['models'].values()))['slides'].values()
+    result['reference_identity'] = {
+        'patients': sorted({s['meta']['patient_id'] for s in reference_slides}),
+        'slides': sorted(s['meta']['slide_id'] for s in reference_slides),
+        'tiles': sorted({tid for s in reference_slides for tid in s['tile_ids'].tolist()}),
+        'image_hashes': sorted({sha for m in data['models'].values() for s in m['slides'].values()
+                                for sha in s['image_sha256'].tolist()})}
     for name, model in data['models'].items():
         raw = defaultdict(list)
         slides = [s for s in model['slides'].values() if s['meta']['split'] == 'calibration']
@@ -48,7 +77,9 @@ def calibrate(dataset_path, config_path, output):
             thresholds[key] = float(np.quantile(values, cfg['calibration_quantile'], method='higher'))
             observed[key] = float((values > thresholds[key]).mean())
         result['models'][name] = {'thresholds': thresholds, 'calibration_flagged_tile_fraction': observed,
-            'calibration_slides': len(slides), 'q2_unavailable_fraction': missing / total}
+            'calibration_slides': len(slides), 'q2_unavailable_fraction': missing / total,
+            'embedding_contract': model['embedding_contract'],
+            'physical_scales': sorted({(s['meta']['tile_size_um'], s['meta']['stride_um']) for s in slides})}
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     write_json(output, result)
     return result
@@ -238,14 +269,17 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
                 # One direction per unordered pair at each nonzero dose, capped
                 # for portable HTML. Complete per-tile arrays are always exported.
                 if dose > 0 and pair_index % 2 == 0 and pair['pair_id'] in example_pair_ids:
+                    selected = np.linspace(0, len(truth)-1, min(MAX_MAP_TILES, len(truth)), dtype=int)
                     examples.append({'model': name, 'host': pair['host'], 'donor': pair['donor'],
                         'regime': pair['regime'], 'pair_id': pair['pair_id'], 'requested_dose': dose,
-                        'dose': bag['actual_fraction'], 'xy_um': bag['xy_um'].tolist(),
-                        'tile_size_um': host['meta']['tile_size_um'], 'scores': signals['combined'].tolist(),
-                        'flags': {m: masks[m].tolist() for m in DETECTORS},
-                        'tile_ids': np.concatenate([host['tile_ids'], donor['tile_ids'][bag['donor_indices']]]).tolist(),
-                        'signal_scores': {m: v.tolist() for m, v in signals.items()},
-                        'flagged': masks['combined'].tolist(), 'inserted': truth.tolist(),
+                        'dose': bag['actual_fraction'], 'xy_um': bag['xy_um'][selected].tolist(),
+                        'tile_size_um': host['meta']['tile_size_um'], 'scores': signals['combined'][selected].tolist(),
+                        'flags': {m: masks[m][selected].tolist() for m in DETECTORS},
+                        'total_tiles': len(truth), 'displayed_tiles': len(selected),
+                        'flagged_counts': {m: int(masks[m].sum()) for m in DETECTORS},
+                        'tile_ids': np.concatenate([host['tile_ids'], donor['tile_ids'][bag['donor_indices']]])[selected].tolist(),
+                        'signal_scores': {m: v[selected].tolist() for m, v in signals.items()},
+                        'flagged': masks['combined'][selected].tolist(), 'inserted': truth[selected].tolist(),
                         'note': 'Coordinate schematic; not a tissue image or clinical annotation'})
     if not rows:
         raise ValueError('All simulation cases failed; inspect cohort/fragment sizes')
@@ -253,6 +287,7 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
         writer = csv.DictWriter(f, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    curves = aggregate(rows)
     summary = {'split': split, 'runtime_seconds': time.perf_counter()-begin,
         'source_patients': len({s['meta']['patient_id'] for s in first['slides'].values()
                                 if s['meta']['split'] == split}),
@@ -260,14 +295,16 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
         'successful_mixtures_by_model': {name: sum(m['model'] == name and m['requested_dose'] > 0
                                                   for m in mixtures) for name in data['models']},
         'data_provenance': sorted({s['meta']['provenance'] for m in data['models'].values() for s in m['slides'].values()}),
-        'sanity': sanity, 'curves': aggregate(rows), 'unmodified_controls': controls,
+        'sanity': sanity, 'curves': curves, 'unmodified_controls': controls,
+        'diagnostics': report_diagnostics(curves, controls),
         'skipped_cases': skipped, 'case_rows': len(rows),
         'limitations': ['Synthetic insertions do not validate real floater detection.',
             'Organ classification is not cancer diagnosis; same-organ donors cannot change organ ground truth.',
             'Unmodified controls are not proven floater-free.',
             'Repeated donor-host mixtures are correlated; no patient confidence intervals computed.',
             'Within-slide normalization and fixed-radius exclusion can mask large or repeated contaminants.',
-            'CPU exact neighbor search is quadratic in tile count; blocking reduces memory, not total work.']}
+            'CPU exact neighbor search is quadratic in tile count; two-axis blocking bounds pairwise memory, not total work.',
+            'Large coordinate maps are deterministic overviews of at most 2000 tiles; metrics and NPZ exports use every tile.']}
     write_json(out / 'summary.json', summary)
     with (out / 'curves.csv').open('w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=list(summary['curves'][0]))

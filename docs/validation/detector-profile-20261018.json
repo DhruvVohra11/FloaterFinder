@@ -1,0 +1,77 @@
+{
+  "baseline_ref": "a9bde03",
+  "baseline_core_sha256": "d3bc41e525236755d17cf678993a2899b4fa37e2065812f4afe9f4a246c376f1",
+  "current_core_sha256": "98731226894e208944fd904b4dfadac55dcab1cc2cf79fc46990be9e3f9fa556",
+  "numpy": "2.5.4",
+  "config": {
+    "neighbors": 10,
+    "exclusion_radius_um": 1000.0,
+    "smoothing_radius_um": 160.0,
+    "visual_weight": 1.0,
+    "chunk_size": 128,
+    "top_k": 10,
+    "calibration_quantile": 0.99,
+    "doses": [
+      0.0,
+      0.005,
+      0.01,
+      0.025,
+      0.05,
+      0.1
+    ],
+    "seed": 7
+  },
+  "measurements": [
+    {
+      "tiles": 512,
+      "dimensions": 128,
+      "median_seconds": {
+        "baseline": 0.021327792201191187,
+        "current": 0.006099999882280827
+      },
+      "speedup": 3.4963594447179887,
+      "max_absolute_signal_errors": {
+        "organ_only": 5.443825550344172e-07,
+        "visual_only": 9.339927219631505e-06,
+        "combined": 9.41711027646619e-06
+      },
+      "baseline_max_pairwise_entries": 65536,
+      "current_max_pairwise_entries": 65536,
+      "note": "Pairwise entries describe one matrix, not peak process memory. Search remains quadratic."
+    },
+    {
+      "tiles": 2048,
+      "dimensions": 128,
+      "median_seconds": {
+        "baseline": 0.3532085004262626,
+        "current": 0.07858191709965467
+      },
+      "speedup": 4.494780904598404,
+      "max_absolute_signal_errors": {
+        "organ_only": 6.779963996894622e-07,
+        "visual_only": 1.578396130275106e-05,
+        "combined": 1.584627013939688e-05
+      },
+      "baseline_max_pairwise_entries": 262144,
+      "current_max_pairwise_entries": 131072,
+      "note": "Pairwise entries describe one matrix, not peak process memory. Search remains quadratic."
+    },
+    {
+      "tiles": 4096,
+      "dimensions": 256,
+      "median_seconds": {
+        "baseline": 1.0692394580692053,
+        "current": 0.30658637499436736
+      },
+      "speedup": 3.487563522967547,
+      "max_absolute_signal_errors": {
+        "organ_only": 5.398688935898122e-07,
+        "visual_only": 1.524149582321499e-05,
+        "combined": 1.5518627067834245e-05
+      },
+      "baseline_max_pairwise_entries": 524288,
+      "current_max_pairwise_entries": 131072,
+      "note": "Pairwise entries describe one matrix, not peak process memory. Search remains quadratic."
+    }
+  ]
+}

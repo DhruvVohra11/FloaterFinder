@@ -23,15 +23,37 @@ CONVENTIONS = {
 }
 
 
-def checked_calibration(dataset_path, calibration_path):
+def checked_calibration(dataset_path, calibration_path, new_cohort=False):
     from .benchmark import source_hash
     data = load_dataset(dataset_path)
     cal = json.loads(Path(calibration_path).read_text())
-    if data['fingerprint'] != cal['dataset_fingerprint']:
+    if not new_cohort and data['fingerprint'] != cal['dataset_fingerprint']:
         raise ValueError('Dataset changed since calibration')
     if source_hash() != cal['source_hashes']:
         raise ValueError('Core implementation changed; recalibration required')
+    if new_cohort:
+        validate_new_cohort(data, cal)
     return data, cal
+
+
+def validate_new_cohort(data, cal):
+    reference = cal.get('reference_identity')
+    if reference is None:
+        raise ValueError('Calibration lacks a future-cohort contract; recalibrate with current code')
+    reference = {key: set(values) for key, values in reference.items()}
+    for name, model in data['models'].items():
+        frozen = cal['models'].get(name)
+        if frozen is None or frozen.get('embedding_contract') != model['embedding_contract']:
+            raise ValueError(f'{name}: frozen model/text embedding contract mismatch')
+        scales = {tuple(scale) for scale in frozen['physical_scales']}
+        for sid, slide in model['slides'].items():
+            meta = slide['meta']
+            if (meta['tile_size_um'], meta['stride_um']) not in scales:
+                raise ValueError(f'{sid}: physical scale was not represented in calibration')
+            if (meta['patient_id'] in reference['patients'] or sid in reference['slides'] or
+                reference['tiles'].intersection(slide['tile_ids'].tolist()) or
+                reference['image_hashes'].intersection(slide['image_sha256'].tolist())):
+                raise ValueError(f'{sid}: new cohort overlaps the original reference cohort')
 
 
 def save_tiles(out, identity, tile_ids, source_slides, xy, scores, signals, valid,
@@ -52,11 +74,11 @@ def save_tiles(out, identity, tile_ids, source_slides, xy, scores, signals, vali
     return {**identity, 'path': f'tiles/{key}.npz', 'tiles': len(tile_ids)}
 
 
-def detect(dataset_path, calibration_path, output, split='development'):
+def detect(dataset_path, calibration_path, output, split='development', new_cohort=False):
     """Score original slides without insertion labels or donor references."""
     if split not in ('development', 'test'):
         raise ValueError('Detect development or test slides, never calibration')
-    data, cal = checked_calibration(dataset_path, calibration_path)
+    data, cal = checked_calibration(dataset_path, calibration_path, new_cohort)
     out = Path(output)
     out.mkdir(parents=True, exist_ok=False)
     index, summary = [], []
@@ -91,6 +113,7 @@ def detect(dataset_path, calibration_path, output, split='development'):
         raise ValueError('No slides in requested split')
     write_json(out / 'tile_artifacts.json', index)
     write_json(out / 'detection.json', {'split': split, 'conventions': CONVENTIONS,
+        'new_cohort': new_cohort,
         'dataset_fingerprint': data['fingerprint'], 'calibration': cal, 'slides': summary,
         'interpretation': 'Candidates for review; unknown real contamination status, no precision/recall claimed.'})
     return out / 'candidates.csv'

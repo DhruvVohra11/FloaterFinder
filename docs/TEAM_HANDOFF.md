@@ -109,7 +109,19 @@ python -m floaterfinder run --dataset data/dataset.json \
   --split test --output outputs/final-001
 ```
 
-Open `outputs/development-001/development/report.html` or `outputs/final-001/test/report.html`. Each output directory must be new. `run.json` records completion or failure. A new test directory is not a fresh holdout. A changed cache or analysis implementation requires recalibration. Current calibration fingerprints bind the complete dataset and its paths, so keep the cache in place while reusing calibration. Do not edit the manifest to switch splits.
+Open `outputs/development-001/development/report.html` or `outputs/final-001/test/report.html`. Each output directory must be new. `run.json` records completion or failure. A new test directory is not a fresh holdout. A changed cache or analysis implementation requires recalibration. Fingerprints bind cache contents and relative layout; an unchanged relative-path bundle can move between machines. Do not edit the manifest to switch splits. Omitting `--config` uses packaged CPU pilot defaults, including outside the source checkout.
+
+### Scoring future embeddings
+
+Once thresholds are frozen, a later independent cohort can be scored explicitly:
+
+```bash
+python -m floaterfinder detect --dataset data/new-cohort/dataset.json \
+  --calibration outputs/development-001/calibration.json \
+  --new-cohort --split test --output outputs/new-cohort-candidates
+```
+
+The new manifest contains only the new cohort, using the usual split labels. It may contain a subset of the calibrated models. Each model must retain the exact encoder fingerprint, normalized text prototypes, label ordering and dimension, with physical scale represented in calibration. Reuse the frozen text bank. Known patient, slide, tile and optional image-hash overlap with the original cohort is rejected. This flag is only for candidate detection; benchmark evaluation remains bound to the original frozen cohort. The result contains no invented ground truth. Passing compatibility checks does not prove calibration transfers across sites or tissue distributions.
 
 For the fully synthetic software check: `python scripts/smoke.py`. It exercises development, original-slide detection, and frozen test evaluation with two mock encoders. It never downloads data or runs a real model.
 

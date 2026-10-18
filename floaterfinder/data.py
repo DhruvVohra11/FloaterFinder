@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+from importlib.resources import files
 import numpy as np
 from .core import unit
 
@@ -121,19 +123,27 @@ def load_dataset(path):
                     raise ValueError('Model caches must cover identical slides/tiles/coordinates')
             canonical[sid] = (identity, xy, ids)
             slides[sid] = {'features': unit(x), 'xy_um': xy.astype(float),
-                           'tile_ids': ids, 'meta': meta}
+                           'tile_ids': ids, 'meta': meta,
+                           'image_sha256': slide.get('image_sha256', np.array([], dtype=str))}
         if not slides:
             raise ValueError('No slides')
         if expected_slides is not None and set(slides) != expected_slides:
             raise ValueError('Models must use identical slide cohorts')
         expected_slides = set(slides)
-        models[model_id] = {'labels': labels, 'prototypes': proto, 'slides': slides}
-    fingerprint = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+        models[model_id] = {'labels': labels, 'prototypes': proto, 'slides': slides,
+            'embedding_contract': {'encoder_fingerprint': fingerprint, 'labels': labels,
+                'dimensions': proto.shape[1],
+                'normalized_prototypes_sha256': hashlib.sha256(proto.tobytes()).hexdigest()}}
+    # The same relative-path bundle can move between machines without changing
+    # identity; changing any manifest/cache bytes still invalidates calibration.
+    relative_hashes = {os.path.relpath(name, path.parent): value for name, value in hashes.items()}
+    fingerprint = hashlib.sha256(json.dumps(relative_hashes, sort_keys=True).encode()).hexdigest()
     return {'models': models, 'fingerprint': fingerprint, 'files': hashes}
 
 
-def load_config(path):
-    cfg = json.loads(Path(path).read_text())
+def load_config(path=None):
+    source = files('floaterfinder').joinpath('default_config.json') if path is None else Path(path)
+    cfg = json.loads(source.read_text())
     required = {'neighbors', 'exclusion_radius_um', 'smoothing_radius_um', 'visual_weight',
                 'chunk_size', 'top_k', 'calibration_quantile', 'doses', 'seed'}
     if set(cfg) != required:

@@ -19,6 +19,9 @@ floaterfinder = "floaterfinder.cli:main"
 [tool.setuptools.packages.find]
 include = ["floaterfinder*"]
 
+[tool.setuptools.package-data]
+floaterfinder = ["default_config.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

@@ -8,8 +8,9 @@ import zipfile
 
 def build(output):
     root = Path(__file__).resolve().parents[1]
-    files = [root / 'README.md', root / 'pyproject.toml']
-    for folder, pattern in [('floaterfinder', '*.py'), ('docs', '*.md'),
+    files = [root / name for name in ('README.md', 'pyproject.toml', 'package.json', 'package-lock.json')]
+    for folder, pattern in [('floaterfinder', '*.py'), ('floaterfinder', '*.json'), ('docs', '*.md'),
+                            ('docs/validation', '*.json'), ('.github/workflows', '*.yml'), ('scripts', '*.mjs'),
                             ('tests', '*.py'), ('examples', '*.json'),
                             ('examples', '*.py'), ('scripts', '*.py'), ('configs', '*.json')]:
         files.extend(sorted((root / folder).glob(pattern)))
