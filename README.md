@@ -6,6 +6,17 @@ This implementation runs on **CPU and saved embeddings**. It does not fine-tune 
 
 ## What works now
 
+**Team split:** model inference, dataset processing and real embeddings belong to the upstream workstream. This repository owns the complete analysis loop. Start with the [teammate handoff and experimental conventions](docs/TEAM_HANDOFF.md).
+
+```bash
+python -m floaterfinder run --dataset data/dataset.json \
+  --config configs/cpu_pilot.json --output outputs/development-001
+```
+
+This validates the cache, records coverage, calibrates on separate slides, benchmarks development mixtures, exports every tile score and flag, and writes `outputs/development-001/development/report.html`. The offline report supports model/pooling/dose/detector selection, metric curves, confusion matrices, candidate maps, and host-removal checks. Final `run --split test` requires `--calibration` from the frozen workflow. Use `inspect` for intake and `detect` for per-tile original-slide candidate exports.
+
+For the first real embedding drop, use `CacheWriter` in the encoder job or `assemble` on a folder of existing slide/text NPZ exports. `preflight` checks reciprocal fragment feasibility before kNN; new development runs perform it automatically. The [handoff guide](docs/TEAM_HANDOFF.md#automatic-export-and-intake) has copyable commands and an exporter example. Create a source-only handoff archive with `python scripts/build_handoff.py --output outputs/teammate-handoff.zip`.
+
 | Component | Status |
 |---|---|
 | Patient-separated cache validation and image/text space checks | Implemented and tested |
@@ -17,6 +28,8 @@ This implementation runs on **CPU and saved embeddings**. It does not fine-tune 
 | Organ-only, visual-only, combined, no-filter, random, oracle comparisons | Implemented and tested |
 | Recovery and host-removal harm measurements | Implemented and tested |
 | Organ confusion matrices, error curves, coordinate flag maps | Implemented; standalone HTML and machine-readable results |
+| Tie-aware per-mixture AUROC / average precision, F1 and abstentions | Implemented; denominators and achieved-dose ranges exported |
+| Single-command workflow and original-slide candidate exports | Implemented; development defaults and frozen-calibration test runs |
 | GDC metadata cohort planner | Executed against public GDC metadata; no slide images downloaded |
 | Quilt metadata audit on Delta | CPU-only script prepared and fixture-tested; awaiting authenticated Delta access |
 | Organizer `/embed` client | Implemented and mocked in tests; no real inference request sent |
@@ -38,7 +51,7 @@ python -m pytest -q
 python scripts/smoke.py
 ```
 
-The smoke command creates a new folder under `outputs/`, validates two distinct mock embedding spaces, calibrates three detectors, evaluates both pooling methods and six removal strategies, and writes `test/report.html`. It uses no network or model inference. The synthetic encoders are deliberately not named CONCH or MUSK.
+The smoke command creates a new folder under `outputs/`, validates two distinct mock embedding spaces, calibrates three detectors, evaluates both pooling methods and six removal strategies on development and test, exports original-slide candidates, and writes `final-run/test/report.html`. It uses no network or model inference. The synthetic encoders are deliberately not named CONCH or MUSK.
 
 ## The actual experiment
 

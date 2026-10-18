@@ -49,6 +49,11 @@ def map_svg(example):
 
 
 def render(run_path, output):
+    from .explorer import render_explorer
+    return render_explorer(run_path, output)
+
+
+def render_static(run_path, output):
     run = Path(run_path)
     summary = json.loads((run / 'summary.json').read_text())
     examples = json.loads((run / 'examples.json').read_text())

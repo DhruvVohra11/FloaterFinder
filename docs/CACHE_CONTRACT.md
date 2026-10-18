@@ -6,6 +6,8 @@ The analysis needs projected image embeddings and text vectors from the **same m
 
 `examples/dataset.template.json` shows the schema. Paths are relative to this JSON file or absolute. A single model is sufficient. Multiple model entries are processed independently; their vectors are never combined. For comparisons, all entries must use exactly the same slide IDs, tile IDs, coordinates and physical scale.
 
+Use `floaterfinder.intake.CacheWriter` from an encoder job to generate and validate the index automatically, or `python -m floaterfinder assemble --input incoming/drop --output data/drop` for a folder of existing contract-format slide/text NPZ files. See [TEAM_HANDOFF.md](TEAM_HANDOFF.md) for export examples and the geometry preflight command. IDs, organ labels, provenance and encoder fingerprints must be nonempty strings; no field is invented by intake.
+
 ## Slide NPZ
 
 Use `np.savez_compressed` with these arrays and a JSON string:

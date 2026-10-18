@@ -32,6 +32,10 @@ Six strategies are compared: no filtering, organ-only, visual-only, combined, ra
 
 The benchmark separately reports prediction changes, correctness, correct-to-incorrect transitions, conditional recovery, inserted-tile precision/recall and host-tile removal. Recovery's denominator includes only cases that were originally correct and became incorrect after insertion. Host removal is measured against known original host tiles, even if the source slide contains an undiscovered real contaminant.
 
+Threshold-free detection uses tie-aware AUROC and non-interpolated average precision within each mixture. Aggregate ranking metrics are macro means over bags containing both inserted and host tiles, with the contributing count recorded. We do not pool standardized scores across slides into one ranking. Precision, recall and F1 aggregate tile counts within each model/regime/pooling/method/dose slice; host-removal rate averages per-case host fractions. Zero-dose ranking and recall are undefined. Non-detector baselines have no continuous ranking metric. The report also records abstentions and the achieved dose range.
+
+All original slides and mixtures export tile IDs, source slide IDs, coordinates, class scores, detector scores/flags and kNN availability in indexed NPZ files. Only simulated mixtures carry `is_inserted` evaluator labels. The `detect` command applies the frozen calibration to original slides without producing oracle labels or claiming measured real-floater precision/recall.
+
 Unmodified-slide controls report both the fraction of tiles flagged and the fraction of slides receiving any flag, plus new classification errors after filtering. Native unusual tissue must remain in these controls. Candidate maps are coordinate schematics: teal host tiles, gold inserted tiles, red detector outlines. They are not WSI overlays or expert labels.
 
 ## D. Evaluation discipline

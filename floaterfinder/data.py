@@ -26,6 +26,20 @@ def npz(path):
         return {k: obj[k] for k in obj.files}
 
 
+def string_scalar(value, name):
+    value = np.asarray(value)
+    if value.shape != () or value.dtype.kind != 'U' or not str(value).strip():
+        raise ValueError(f'{name} must be a nonempty scalar string')
+    return str(value)
+
+
+def string_vector(value, name):
+    value = np.asarray(value)
+    if value.ndim != 1 or value.dtype.kind != 'U' or not all(v.strip() for v in value.tolist()):
+        raise ValueError(f'{name} must be a vector of nonempty strings')
+    return value.tolist()
+
+
 def load_dataset(path):
     path = Path(path).resolve()
     manifest = json.loads(path.read_text())
@@ -36,40 +50,47 @@ def load_dataset(path):
     expected_slides = None
     for entry in manifest['models']:
         model_id = entry['model_id']
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError('model_id must be a nonempty string')
         if model_id in models:
             raise ValueError('Duplicate model entry')
         bank_path = (path.parent / entry['text_bank']).resolve()
         bank = npz(bank_path)
         hashes[str(bank_path)] = sha256(bank_path)
-        labels = bank['labels'].tolist()
+        labels = string_vector(bank['labels'], 'labels')
         if len(labels) < 2 or len(set(labels)) != len(labels) or not all(labels):
             raise ValueError('Need unique nonempty organ labels')
         proto = unit(bank['prototypes'])
         if proto.ndim != 2 or len(proto) != len(labels):
             raise ValueError('Text bank shape mismatch')
-        if str(bank['model_id']) != model_id:
+        if string_scalar(bank['model_id'], 'model_id') != model_id:
             raise ValueError('Text bank model mismatch')
+        fingerprint = string_scalar(bank['encoder_fingerprint'], 'encoder_fingerprint')
         slides = {}
         for rel in entry['slides']:
             file = (path.parent / rel).resolve()
             slide = npz(file)
             hashes[str(file)] = sha256(file)
-            meta = json.loads(str(slide['metadata']))
+            meta = json.loads(string_scalar(slide['metadata'], 'metadata'))
             required = {'slide_id', 'patient_id', 'organ', 'split', 'model_id',
                         'encoder_fingerprint', 'tile_size_um', 'stride_um', 'provenance'}
             if not required.issubset(meta):
                 raise ValueError('Missing slide metadata')
+            for key in required - {'tile_size_um', 'stride_um'}:
+                if not isinstance(meta[key], str) or not meta[key].strip():
+                    raise ValueError(f'{key} must be a nonempty string')
             sid, patient = meta['slide_id'], meta['patient_id']
             if not sid or not patient or sid in slides or meta['split'] not in SPLITS:
                 raise ValueError('Invalid slide/patient/split identity')
             if meta['organ'] not in labels or meta['model_id'] != model_id:
                 raise ValueError('Slide organ/model mismatch')
-            if meta['encoder_fingerprint'] != str(bank['encoder_fingerprint']):
+            if meta['encoder_fingerprint'] != fingerprint:
                 raise ValueError('Image/text encoder fingerprints do not match')
             for key in ('tile_size_um', 'stride_um'):
                 if not np.isfinite(meta[key]) or meta[key] <= 0:
                     raise ValueError('Invalid physical scale')
             x, xy, ids = slide['features'], slide['xy_um'], slide['tile_ids']
+            string_vector(ids, 'tile_ids')
             if x.ndim != 2 or len(x) < 2 or x.shape[1] != proto.shape[1]:
                 raise ValueError('Feature dimensions mismatch or insufficient tiles')
             if xy.shape != (len(x), 2) or not np.isfinite(xy).all():

@@ -1,20 +1,51 @@
 from __future__ import annotations
 
 from collections import deque
-import math
+from decimal import Decimal, ROUND_CEILING
 import numpy as np
 
 
 def unit(x):
     x = np.asarray(x, dtype=np.float32)
-    norms = np.linalg.norm(x, axis=-1, keepdims=True)
+    norms = np.linalg.norm(x.astype(np.float64), axis=-1, keepdims=True)
     if not np.isfinite(x).all() or (norms < 1e-8).any():
         raise ValueError('Embeddings must be finite and nonzero')
-    return x / norms
+    return (x / norms).astype(np.float32)
 
 
 def cosine_scores(features, prototypes):
     return unit(features) @ unit(prototypes).T
+
+
+def donor_count(host_tiles, fraction):
+    """Final-bag fraction; decimal arithmetic avoids ceil(7.000000000000001)."""
+    if host_tiles < 1 or not np.isfinite(fraction) or not 0 <= fraction < 1:
+        raise ValueError('Need positive host count and finite dose in [0,1)')
+    f = Decimal(str(fraction))
+    return int((f * int(host_tiles) / (1 - f)).to_integral_value(rounding=ROUND_CEILING))
+
+
+def ranking_metrics(scores, truth):
+    """Tie-aware AUROC and non-interpolated average precision for one bag.
+
+    Scores are standardized per bag, so aggregate these metrics across bags,
+    never by treating scores from different slides as a shared ranking.
+    """
+    scores, truth = np.asarray(scores, dtype=float), np.asarray(truth, dtype=bool)
+    if scores.ndim != 1 or scores.shape != truth.shape or not np.isfinite(scores).all():
+        raise ValueError('Expected finite scores and aligned binary truth')
+    positives, negatives = int(truth.sum()), int((~truth).sum())
+    if not positives or not negatives:
+        return {'auroc': None, 'average_precision': None}
+    order = np.argsort(-scores, kind='stable')
+    ordered = scores[order]
+    ends = np.r_[np.flatnonzero(np.diff(ordered) != 0), len(scores)-1]
+    tp = np.cumsum(truth[order])[ends]
+    fp = ends + 1 - tp
+    recall, fpr = np.r_[0., tp / positives], np.r_[0., fp / negatives]
+    auroc = np.sum(np.diff(fpr) * (recall[1:] + recall[:-1]) / 2)
+    ap = np.sum(np.diff(recall) * tp / (tp + fp))
+    return {'auroc': float(auroc), 'average_precision': float(ap)}
 
 
 def predict(scores, pooling, top_k):
@@ -141,7 +172,7 @@ def inject(host, donor, fraction, seed):
     if not 0 <= fraction < 1:
         raise ValueError('Dose must be in [0,1)')
     n = len(host['features'])
-    count = int(math.ceil(fraction * n / (1 - fraction))) if fraction else 0
+    count = donor_count(n, fraction)
     chosen = connected_fragment(donor['xy_um'], dm['stride_um'], count, seed)
     donor_xy = donor['xy_um'][chosen].copy()
     if count:

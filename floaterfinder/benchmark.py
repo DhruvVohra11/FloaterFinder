@@ -11,13 +11,14 @@ import numpy as np
 
 from . import core
 from .data import load_dataset, load_config, sha256, write_json
+from .detection import CONVENTIONS, checked_calibration, save_tiles
 
 DETECTORS = ('organ_only', 'visual_only', 'combined')
 
 
 def source_hash():
     root = Path(__file__).parent
-    return {name: sha256(root / name) for name in ('core.py', 'data.py', 'benchmark.py')}
+    return {name: sha256(root / name) for name in ('core.py', 'data.py', 'benchmark.py', 'detection.py')}
 
 
 def calibrate(dataset_path, config_path, output):
@@ -48,6 +49,7 @@ def calibrate(dataset_path, config_path, output):
             observed[key] = float((values > thresholds[key]).mean())
         result['models'][name] = {'thresholds': thresholds, 'calibration_flagged_tile_fraction': observed,
             'calibration_slides': len(slides), 'q2_unavailable_fraction': missing / total}
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
     write_json(output, result)
     return result
 
@@ -94,6 +96,7 @@ def aggregate(rows):
         tp = sum(r['true_positive_tiles'] for r in cases)
         fp = sum(r['false_positive_tiles'] for r in cases)
         foreign = sum(r['foreign_tiles'] for r in cases)
+        ranking = [r for r in cases if r.get('auroc') is not None]
         result.append({'model': model, 'regime': regime, 'pooling': pooling, 'method': method,
             'dose': dose, 'cases': len(cases), 'initially_correct_cases': len(correct),
             'corrupted_correct_cases': len(corrupted),
@@ -103,6 +106,14 @@ def aggregate(rows):
             'recovery_rate': float(np.mean([r['prediction'] == r['true_class'] for r in corrupted])) if corrupted else None,
             'detection_precision': tp / (tp+fp) if tp+fp else None,
             'detection_recall': tp / foreign if foreign else None,
+            'detection_f1': 2*tp / (tp+fp+foreign) if tp+fp+foreign else None,
+            'macro_auroc': float(np.mean([r['auroc'] for r in ranking])) if ranking else None,
+            'macro_average_precision': float(np.mean([r['average_precision'] for r in ranking])) if ranking else None,
+            'ranking_cases': len(ranking),
+            'actual_dose_min': min(r.get('actual_dose', dose) for r in cases),
+            'actual_dose_max': max(r.get('actual_dose', dose) for r in cases),
+            'abstention_rate': float(np.mean([r['prediction'] is None for r in cases])),
+            'q2_unavailable_fraction': float(np.mean([r.get('q2_unavailable_fraction', 0) for r in cases])),
             'host_removal_rate': float(np.mean([r['host_removal_rate'] for r in cases]))})
     return result
 
@@ -110,18 +121,13 @@ def aggregate(rows):
 def evaluate(dataset_path, calibration_path, output, split='test'):
     if split not in ('development', 'test'):
         raise ValueError('Evaluate development or test, never calibration')
-    data = load_dataset(dataset_path)
-    cal = json.loads(Path(calibration_path).read_text())
-    if data['fingerprint'] != cal['dataset_fingerprint']:
-        raise ValueError('Dataset changed since calibration')
-    if source_hash() != cal['source_hashes']:
-        raise ValueError('Core implementation changed; recalibration required')
+    data, cal = checked_calibration(dataset_path, calibration_path)
     cfg = cal['config']
     out = Path(output)
     out.mkdir(parents=True, exist_ok=False)
     write_json(out / 'protocol.json', {'calibration_sha256': sha256(calibration_path),
         'dataset_fingerprint': data['fingerprint'], 'source_hashes': source_hash(), 'config': cfg,
-        'split': split, 'opened_at': datetime.now(timezone.utc).isoformat(),
+        'split': split, 'opened_at': datetime.now(timezone.utc).isoformat(), 'conventions': CONVENTIONS,
         'endpoint': 'Organ classification, not disease diagnosis',
         'primary': 'Combined versus no_filter correct-to-incorrect rate at each dose, with host-removal harm reported',
         'note': 'A new directory is not a fresh holdout. Do not retune after inspecting test results.'})
@@ -131,16 +137,29 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
     if not pairs:
         raise ValueError('No host/donor pairs in requested split')
     write_json(out / 'pairs.json', pairs)
-    rows, controls, examples, skipped, mixtures = [], [], [], [], []
+    example_pair_ids = set()
+    for regime in sorted({p['regime'] for p in pairs}):
+        example_pair_ids.update(list(dict.fromkeys(p['pair_id'] for p in pairs
+                                                   if p['regime'] == regime))[:3])
+    rows, controls, examples, skipped, mixtures, artifacts = [], [], [], [], [], []
     sanity = {}
     for name, model in data['models'].items():
         thresholds = cal['models'][name]['thresholds']
         split_slides = [s for s in model['slides'].values() if s['meta']['split'] == split]
+        clean_cache = {}
+        for s in split_slides:
+            sid = s['meta']['slide_id']
+            own = model['labels'].index(s['meta']['organ'])
+            scores, signals, valid = core.foreignness(s['features'], s['xy_um'], model['prototypes'], own, cfg)
+            clean_cache[sid] = scores, signals, valid
+            artifacts.append(save_tiles(out, {'model': name, 'slide': sid, 'kind': 'original'},
+                s['tile_ids'], [sid]*len(scores), s['xy_um'], scores, signals, valid,
+                thresholds, model['labels']))
         for pooling in ('mean', 'topk'):
             confusion = np.zeros((len(model['labels']), len(model['labels'])), dtype=int)
             for s in split_slides:
                 true = model['labels'].index(s['meta']['organ'])
-                scores, signals, valid = core.foreignness(s['features'], s['xy_um'], model['prototypes'], true, cfg)
+                scores, signals, valid = clean_cache[s['meta']['slide_id']]
                 pred = core.predict(scores, pooling, cfg['top_k'])
                 confusion[true, pred] += 1
                 for method in DETECTORS:
@@ -172,7 +191,7 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
         for pair_index, pair in enumerate(pairs):
             host, donor = model['slides'][pair['host']], model['slides'][pair['donor']]
             own = model['labels'].index(host['meta']['organ'])
-            clean_scores = core.cosine_scores(host['features'], model['prototypes'])
+            clean_scores = clean_cache[pair['host']][0]
             for dose in cfg['doses']:
                 if (pair['pair_id'], dose) in failed:
                     continue
@@ -182,8 +201,18 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
                     'host_tile_count': len(host['features']),
                     'donor_tile_ids': donor['tile_ids'][bag['donor_indices']].tolist(),
                     'inserted_xy_um': bag['xy_um'][bag['is_foreign']].tolist()})
-                scores, signals, valid = core.foreignness(bag['features'], bag['xy_um'], model['prototypes'], own, cfg)
+                if dose == 0:
+                    scores, signals, valid = clean_cache[pair['host']]
+                else:
+                    scores, signals, valid = core.foreignness(bag['features'], bag['xy_um'], model['prototypes'], own, cfg)
                 truth = bag['is_foreign']
+                artifacts.append(save_tiles(out,
+                    {'model': name, 'kind': 'mixture', **pair, 'requested_dose': dose,
+                     'actual_dose': bag['actual_fraction']},
+                    np.concatenate([host['tile_ids'], donor['tile_ids'][bag['donor_indices']]]),
+                    [pair['host']]*len(host['features']) + [pair['donor']]*int(truth.sum()),
+                    bag['xy_um'], scores, signals, valid, thresholds, model['labels'], truth))
+                ranks = {method: core.ranking_metrics(values, truth) for method, values in signals.items()}
                 masks = {method: signals[method] > thresholds[method] for method in DETECTORS}
                 masks['no_filter'] = np.zeros(len(truth), dtype=bool)
                 masks['oracle'] = truth.copy()
@@ -197,16 +226,25 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
                     for method, flags in masks.items():
                         rows.append({'model': name, 'pair_id': pair['pair_id'],
                             'host': pair['host'], 'donor': pair['donor'],
+                            'host_patient': host['meta']['patient_id'], 'donor_patient': donor['meta']['patient_id'],
                             'regime': pair['regime'], 'pooling': pooling, 'method': method,
                             'dose': dose, 'actual_dose': bag['actual_fraction'], 'true_class': own,
                             'clean_prediction': clean_pred, 'contaminated_prediction': contaminated,
                             'prediction': core.predict(scores[~flags], pooling, cfg['top_k']),
-                            'foreign_tiles': int(truth.sum()), 'q2_unavailable_fraction': float((~valid).mean()),
+                            'host_tiles': len(host['features']), 'foreign_tiles': int(truth.sum()),
+                            'q2_unavailable_fraction': float((~valid).mean()),
+                            **ranks.get(method, {'auroc': None, 'average_precision': None}),
                             **core.detection_metrics(flags, truth)})
-                if dose == cfg['doses'][-1] and pair_index < 2:
+                # One direction per unordered pair at each nonzero dose, capped
+                # for portable HTML. Complete per-tile arrays are always exported.
+                if dose > 0 and pair_index % 2 == 0 and pair['pair_id'] in example_pair_ids:
                     examples.append({'model': name, 'host': pair['host'], 'donor': pair['donor'],
+                        'regime': pair['regime'], 'pair_id': pair['pair_id'], 'requested_dose': dose,
                         'dose': bag['actual_fraction'], 'xy_um': bag['xy_um'].tolist(),
                         'tile_size_um': host['meta']['tile_size_um'], 'scores': signals['combined'].tolist(),
+                        'flags': {m: masks[m].tolist() for m in DETECTORS},
+                        'tile_ids': np.concatenate([host['tile_ids'], donor['tile_ids'][bag['donor_indices']]]).tolist(),
+                        'signal_scores': {m: v.tolist() for m, v in signals.items()},
                         'flagged': masks['combined'].tolist(), 'inserted': truth.tolist(),
                         'note': 'Coordinate schematic; not a tissue image or clinical annotation'})
     if not rows:
@@ -231,6 +269,11 @@ def evaluate(dataset_path, calibration_path, output, split='test'):
             'Within-slide normalization and fixed-radius exclusion can mask large or repeated contaminants.',
             'CPU exact neighbor search is quadratic in tile count; blocking reduces memory, not total work.']}
     write_json(out / 'summary.json', summary)
+    with (out / 'curves.csv').open('w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary['curves'][0]))
+        writer.writeheader()
+        writer.writerows(summary['curves'])
     write_json(out / 'mixtures.json', mixtures)
     write_json(out / 'examples.json', examples)
+    write_json(out / 'tile_artifacts.json', artifacts)
     return summary

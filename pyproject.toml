@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "floaterfinder"
+version = "0.1.0"
+description = "CPU-first tissue contamination benchmark on cached pathology embeddings"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+service = ["requests>=2.31"]
+
+[project.scripts]
+floaterfinder = "floaterfinder.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["floaterfinder*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
